@@ -3,7 +3,7 @@
 # ABOUTME: Can be sourced for functions or executed as CLI
 
 # Version
-BWSH_VERSION="1.1.0"
+BWSH_VERSION="1.2.0"
 
 # Configuration
 # Default project ID - set this after creating your project in Bitwarden
@@ -39,14 +39,35 @@ _bwsh_check_deps() {
 }
 
 # Retrieve a secret by key name
-# Usage: bwgetkey <key_name>
+# Usage: bwgetkey <key_name> [--project <project_id>]
 # Example: bwgetkey ANTHROPIC_API_KEY
 bwgetkey() {
     _bwsh_load_config
-    local key_name="$1"
+    local key_name=""
+    local project_id=""
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --project|-p)
+                project_id="$2"
+                shift 2
+                ;;
+            -*)
+                echo "Unknown option: $1" >&2
+                return 1
+                ;;
+            *)
+                if [[ -z "$key_name" ]]; then
+                    key_name="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
 
     if [[ -z "$key_name" ]]; then
-        echo "Usage: bwgetkey <key_name>" >&2
+        echo "Usage: bwgetkey <key_name> [--project <project_id>]" >&2
         return 1
     fi
 
@@ -57,9 +78,13 @@ bwgetkey() {
         return 1
     fi
 
-    # List all secrets and filter by key name, extract value
+    # List secrets (optionally filtered by project) and extract value by key name
     local result
-    result=$(bws secret list 2>/dev/null | jq -r ".[] | select(.key==\"$key_name\") | .value" 2>/dev/null)
+    if [[ -n "$project_id" ]]; then
+        result=$(bws secret list "$project_id" 2>/dev/null | jq -r ".[] | select(.key==\"$key_name\") | .value" 2>/dev/null)
+    else
+        result=$(bws secret list 2>/dev/null | jq -r ".[] | select(.key==\"$key_name\") | .value" 2>/dev/null)
+    fi
 
     if [[ -z "$result" ]]; then
         echo "Error: Secret '$key_name' not found" >&2
@@ -70,17 +95,44 @@ bwgetkey() {
 }
 
 # Store a secret
-# Usage: bwkey <key_name> [value]
+# Usage: bwkey <key_name> [value] [--project <project_id>]
 # If value is omitted, prompts securely
 # Example: bwkey ANTHROPIC_API_KEY sk-ant-...
 bwkey() {
     _bwsh_load_config
-    local key_name="$1"
-    local value="${2:-}"
-    local project_id="${BWS_DEFAULT_PROJECT_ID}"
+    local key_name=""
+    local value=""
+    local project_id=""
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --project|-p)
+                project_id="$2"
+                shift 2
+                ;;
+            -*)
+                echo "Unknown option: $1" >&2
+                return 1
+                ;;
+            *)
+                if [[ -z "$key_name" ]]; then
+                    key_name="$1"
+                elif [[ -z "$value" ]]; then
+                    value="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    # Use default project if not specified
+    if [[ -z "$project_id" ]]; then
+        project_id="${BWS_DEFAULT_PROJECT_ID}"
+    fi
 
     if [[ -z "$key_name" ]]; then
-        echo "Usage: bwkey <key_name> [value]" >&2
+        echo "Usage: bwkey <key_name> [value] [--project <project_id>]" >&2
         return 1
     fi
 
@@ -90,10 +142,8 @@ bwkey() {
     fi
 
     if [[ -z "$project_id" ]]; then
-        echo "Error: BWS_DEFAULT_PROJECT_ID not set" >&2
-        echo "Find your project ID with: bws project list" >&2
-        echo "Then set: export BWS_DEFAULT_PROJECT_ID='your-project-id'" >&2
-        echo "Or run: bwsh setup" >&2
+        echo "Error: No project specified and BWS_DEFAULT_PROJECT_ID not set" >&2
+        echo "Use --project <id> or run: bwsh setup" >&2
         return 1
     fi
 
@@ -103,9 +153,13 @@ bwkey() {
         echo
     fi
 
-    # Check if secret already exists
+    # Check if secret already exists (in specified project if given)
     local existing_id
-    existing_id=$(bws secret list 2>/dev/null | jq -r ".[] | select(.key==\"$key_name\") | .id" 2>/dev/null)
+    if [[ -n "$project_id" ]]; then
+        existing_id=$(bws secret list "$project_id" 2>/dev/null | jq -r ".[] | select(.key==\"$key_name\") | .id" 2>/dev/null)
+    else
+        existing_id=$(bws secret list 2>/dev/null | jq -r ".[] | select(.key==\"$key_name\") | .id" 2>/dev/null)
+    fi
 
     if [[ -n "$existing_id" ]]; then
         # Update existing secret
@@ -360,10 +414,10 @@ USAGE:
   source bwsh               Load functions into current shell
 
 COMMANDS:
-  get <name>                Get a secret value
-  set <name> [value]        Create or update a secret (prompts if value omitted)
-  list                      List all secret names
-  delete <name>             Delete a secret
+  get <name> [-p <project>]       Get a secret value
+  set <name> [val] [-p <project>] Create or update a secret
+  list                            List all secret names
+  delete <name>                   Delete a secret
   run <cmd> [args...]       Run command with secrets as env vars
   env export                Export secrets as .env format
   env import <file>         Import secrets from .env file
@@ -372,10 +426,10 @@ COMMANDS:
   help                      Show this help
 
 SHELL FUNCTIONS (when sourced):
-  bwgetkey <name>           Get a secret value
-  bwkey <name> [value]      Create or update a secret
-  bwkeys                    List all secret names
-  bwdelkey <name>           Delete a secret
+  bwgetkey <name> [-p <project>]       Get a secret value
+  bwkey <name> [val] [-p <project>]    Create or update a secret
+  bwkeys                               List all secret names
+  bwdelkey <name>                      Delete a secret
   bwrun <cmd> [args...]     Run command with secrets as env vars
   bwenv export|import       Export/import .env files
 
@@ -389,6 +443,8 @@ EXAMPLES:
   # CLI mode
   bwsh set API_KEY sk-abc123
   bwsh get API_KEY
+  bwsh set DB_PASS secret -p abc123   # Use specific project
+  bwsh get DB_PASS -p abc123
   bwsh list
   bwsh delete API_KEY
   bwsh run npm start          # Run with secrets injected
@@ -398,6 +454,7 @@ EXAMPLES:
   # Function mode (after sourcing)
   bwkey API_KEY sk-abc123
   bwgetkey API_KEY
+  bwkey DB_PASS secret -p abc123      # Use specific project
   bwkeys
   bwdelkey API_KEY
   bwrun python app.py         # Run with secrets injected

@@ -88,6 +88,10 @@ bwsh set API_KEY sk-abc123
 # Retrieve a secret
 bwsh get API_KEY
 
+# Use a specific project (overrides default)
+bwsh set DB_PASS secret --project abc123
+bwsh get DB_PASS -p abc123
+
 # List all secrets
 bwsh list
 
