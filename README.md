@@ -28,6 +28,11 @@ curl -fsSL https://raw.githubusercontent.com/hex/bwsh/main/install.sh | bash
 
 > :warning: Always review scripts ([install.sh](install.sh)) before running them from the internet.
 
+The installer:
+- Adds `bwsh` to `~/.local/bin/`
+- Installs shell completions for bash and zsh
+- Optionally runs credential setup
+
 ## Setup
 
 After installation, run the setup command to configure your credentials:
