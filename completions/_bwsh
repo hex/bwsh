@@ -1,4 +1,4 @@
-#compdef bwsh bwgetkey bwkey bwkeys bwdelkey
+#compdef bwsh bwgetkey bwkey bwkeys bwdelkey bwrun bwenv
 # ABOUTME: Zsh completion script for bwsh (Bitwarden Secrets Manager wrapper)
 # ABOUTME: Provides tab-completion for commands and secret names
 
@@ -23,6 +23,8 @@ _bwsh() {
         'set:Create or update a secret'
         'list:List all secret names'
         'delete:Delete a secret'
+        'run:Run command with secrets as env vars'
+        'env:Export/import .env files'
         'setup:Interactive configuration'
         'version:Show version'
         'help:Show help'
@@ -45,6 +47,22 @@ _bwsh() {
                 _bwsh_secrets
             fi
             # Value argument: no completion
+            ;;
+        run)
+            # Complete with executables
+            _command_names -e
+            ;;
+        env)
+            if [[ $CURRENT -eq 3 ]]; then
+                local -a env_commands
+                env_commands=(
+                    'export:Export secrets as .env format'
+                    'import:Import secrets from .env file'
+                )
+                _describe 'env command' env_commands
+            elif [[ $CURRENT -eq 4 && "${words[3]}" == "import" ]]; then
+                _files
+            fi
             ;;
     esac
 
@@ -73,6 +91,25 @@ _bwkeys() {
     return 1
 }
 
+# bwrun - command completion
+_bwrun() {
+    _command_names -e
+}
+
+# bwenv - subcommand completion
+_bwenv() {
+    if [[ $CURRENT -eq 2 ]]; then
+        local -a env_commands
+        env_commands=(
+            'export:Export secrets as .env format'
+            'import:Import secrets from .env file'
+        )
+        _describe 'env command' env_commands
+    elif [[ $CURRENT -eq 3 && "${words[2]}" == "import" ]]; then
+        _files
+    fi
+}
+
 # Service dispatch
 case "$service" in
     bwsh)
@@ -89,5 +126,11 @@ case "$service" in
         ;;
     bwdelkey)
         _bwdelkey "$@"
+        ;;
+    bwrun)
+        _bwrun "$@"
+        ;;
+    bwenv)
+        _bwenv "$@"
         ;;
 esac

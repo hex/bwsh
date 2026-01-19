@@ -11,7 +11,7 @@ _bwsh_completions() {
     }
 
     # Commands
-    local commands="get set list delete setup version help"
+    local commands="get set list delete run env setup version help"
 
     # Get list of secret names (cached for performance)
     _bwsh_secrets() {
@@ -27,7 +27,7 @@ _bwsh_completions() {
     fi
 
     # Second argument: depends on command
-    case "$prev" in
+    case "${words[1]}" in
         get|delete)
             # Complete with secret names
             COMPREPLY=($(compgen -W "$(_bwsh_secrets)" -- "$cur"))
@@ -38,6 +38,19 @@ _bwsh_completions() {
                 COMPREPLY=($(compgen -W "$(_bwsh_secrets)" -- "$cur"))
             fi
             # Second arg after set: value (no completion)
+            ;;
+        run)
+            # Complete with executables
+            COMPREPLY=($(compgen -c -- "$cur"))
+            ;;
+        env)
+            # Subcommands for env
+            if [[ $cword -eq 2 ]]; then
+                COMPREPLY=($(compgen -W "export import" -- "$cur"))
+            elif [[ "${words[2]}" == "import" ]]; then
+                # File completion for import
+                COMPREPLY=($(compgen -f -- "$cur"))
+            fi
             ;;
         *)
             COMPREPLY=()
@@ -69,8 +82,19 @@ _bwkey_completions() {
     fi
 }
 
+_bwenv_completions() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    local cword=$COMP_CWORD
+    if [[ $cword -eq 1 ]]; then
+        COMPREPLY=($(compgen -W "export import" -- "$cur"))
+    elif [[ "${COMP_WORDS[1]}" == "import" ]]; then
+        COMPREPLY=($(compgen -f -- "$cur"))
+    fi
+}
+
 # Register completion functions
 complete -F _bwsh_completions bwsh
 complete -F _bwgetkey_completions bwgetkey
 complete -F _bwdelkey_completions bwdelkey
 complete -F _bwkey_completions bwkey
+complete -F _bwenv_completions bwenv

@@ -2,7 +2,7 @@
 
 Shell wrapper for [Bitwarden Secrets Manager](https://bitwarden.com/products/secrets-manager/) CLI (`bws`).
 
-Provides simple functions to store, retrieve, list, and delete secrets from your terminal.
+Simplifies local development by letting you manage secrets by name (not UUID), run commands with secrets injected, and migrate to/from `.env` files.
 
 ## Prerequisites
 
@@ -53,9 +53,32 @@ export BWS_DEFAULT_PROJECT_ID="your-project-id"
 
 ## Usage
 
-### CLI Mode
+### Run Commands with Secrets
 
-Run commands directly:
+Run any command with all secrets injected as environment variables:
+
+```bash
+bwsh run npm start
+bwsh run python app.py
+bwsh run docker-compose up
+```
+
+No `.env` file needed - secrets are injected directly into the subprocess.
+
+### Export/Import .env Files
+
+```bash
+# Export secrets to .env format
+bwsh env export > .env.local
+
+# Import secrets from .env file
+bwsh env import .env
+
+# Preview what would be imported
+bwsh env import .env --dry-run
+```
+
+### Manage Secrets by Name
 
 ```bash
 # Store a secret (prompts for value if omitted)
@@ -84,18 +107,12 @@ source ~/.local/bin/bwsh
 Then use the functions directly:
 
 ```bash
-# Store a secret
-bwkey API_KEY sk-abc123
-bwkey API_KEY              # Prompts securely for value
-
-# Retrieve a secret
-bwgetkey API_KEY
-
-# List all secrets
-bwkeys
-
-# Delete a secret
-bwdelkey API_KEY
+bwkey API_KEY sk-abc123    # Store
+bwgetkey API_KEY           # Retrieve
+bwkeys                     # List
+bwdelkey API_KEY           # Delete
+bwrun npm start            # Run with secrets
+bwenv export               # Export .env
 ```
 
 ### Tab Completion

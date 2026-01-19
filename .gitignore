@@ -17,3 +17,8 @@ Thumbs.db
 # Test files
 test-*
 *.test
+
+# bd issue tracking (local only)
+.beads/
+AGENTS.md
+.gitattributes
