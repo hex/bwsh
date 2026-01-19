@@ -26,6 +26,8 @@ cd bwsh
 curl -fsSL https://raw.githubusercontent.com/hex/bwsh/main/install.sh | bash
 ```
 
+> :warning: Always review scripts ([install.sh](install.sh)) before running them from the internet.
+
 ## Setup
 
 After installation, run the setup command to configure your credentials:
