@@ -26,6 +26,7 @@ _bwsh() {
         'run:Run command with secrets as env vars'
         'env:Export/import .env files'
         'setup:Interactive configuration'
+        'update:Update to latest version'
         'version:Show version'
         'help:Show help'
     )
@@ -49,8 +50,16 @@ _bwsh() {
             # Value argument: no completion
             ;;
         run)
-            # Complete with executables
-            _command_names -e
+            # Check for --project/-p flag
+            if [[ "${words[CURRENT-1]}" == "--project" || "${words[CURRENT-1]}" == "-p" ]]; then
+                return 0  # No completion for project ID
+            fi
+            # Offer --project flag or executables
+            if [[ "${words[CURRENT]}" == -* ]]; then
+                _arguments '--project[Use specific project]:project id:' '-p[Use specific project]:project id:'
+            else
+                _command_names -e
+            fi
             ;;
         env)
             if [[ $CURRENT -eq 3 ]]; then
@@ -60,9 +69,21 @@ _bwsh() {
                     'import:Import secrets from .env file'
                 )
                 _describe 'env command' env_commands
-            elif [[ $CURRENT -eq 4 && "${words[3]}" == "import" ]]; then
-                _files
+            elif [[ "${words[3]}" == "import" ]]; then
+                # Check for --project/-p flag
+                if [[ "${words[CURRENT-1]}" == "--project" || "${words[CURRENT-1]}" == "-p" ]]; then
+                    return 0  # No completion for project ID
+                fi
+                # Offer file completion or flags
+                if [[ "${words[CURRENT]}" == -* ]]; then
+                    _arguments '--project[Use specific project]:project id:' '-p[Use specific project]:project id:' '--dry-run[Preview without importing]'
+                else
+                    _files
+                fi
             fi
+            ;;
+        update)
+            _arguments '--check[Check for updates without installing]' '-c[Check for updates without installing]'
             ;;
     esac
 
@@ -91,12 +112,21 @@ _bwkeys() {
     return 1
 }
 
-# bwrun - command completion
+# bwrun - command completion with --project flag
 _bwrun() {
-    _command_names -e
+    # Check for --project/-p flag
+    if [[ "${words[CURRENT-1]}" == "--project" || "${words[CURRENT-1]}" == "-p" ]]; then
+        return 0  # No completion for project ID
+    fi
+    # Offer --project flag or executables
+    if [[ "${words[CURRENT]}" == -* ]]; then
+        _arguments '--project[Use specific project]:project id:' '-p[Use specific project]:project id:'
+    else
+        _command_names -e
+    fi
 }
 
-# bwenv - subcommand completion
+# bwenv - subcommand completion with --project flag for import
 _bwenv() {
     if [[ $CURRENT -eq 2 ]]; then
         local -a env_commands
@@ -105,8 +135,17 @@ _bwenv() {
             'import:Import secrets from .env file'
         )
         _describe 'env command' env_commands
-    elif [[ $CURRENT -eq 3 && "${words[2]}" == "import" ]]; then
-        _files
+    elif [[ "${words[2]}" == "import" ]]; then
+        # Check for --project/-p flag
+        if [[ "${words[CURRENT-1]}" == "--project" || "${words[CURRENT-1]}" == "-p" ]]; then
+            return 0  # No completion for project ID
+        fi
+        # Offer file completion or flags
+        if [[ "${words[CURRENT]}" == -* ]]; then
+            _arguments '--project[Use specific project]:project id:' '-p[Use specific project]:project id:' '--dry-run[Preview without importing]'
+        else
+            _files
+        fi
     fi
 }
 

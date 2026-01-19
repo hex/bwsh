@@ -3,7 +3,7 @@
 # ABOUTME: Can be sourced for functions or executed as CLI
 
 # Version
-BWSH_VERSION="1.2.0"
+BWSH_VERSION="2026.1.0"
 
 # Configuration
 # Default project ID - set this after creating your project in Bitwarden
@@ -24,6 +24,70 @@ _bwsh_load_config() {
     fi
 }
 
+# Interactive project selection
+# Lists available projects and prompts user to select one
+_bwsh_select_project() {
+    local projects project_count
+
+    projects=$(bws project list 2>/dev/null | jq -r '.[] | "\(.id)|\(.name)"' 2>/dev/null)
+
+    if [[ -z "$projects" ]]; then
+        echo "Error: No projects found (check your token)" >&2
+        return 1
+    fi
+
+    project_count=$(echo "$projects" | wc -l | tr -d ' ')
+
+    if [[ $project_count -eq 1 ]]; then
+        # Auto-select single project
+        local selected_id selected_name
+        selected_id=$(echo "$projects" | cut -d'|' -f1)
+        selected_name=$(echo "$projects" | cut -d'|' -f2)
+        echo "Auto-selected project: $selected_name" >&2
+        echo "$selected_id"
+        return 0
+    fi
+
+    # Show numbered list and prompt
+    echo "Select a project:" >&2
+    local i=1
+    while IFS='|' read -r id name; do
+        echo "  $i) $name" >&2
+        ((i++))
+    done <<< "$projects"
+
+    local selection
+    read -p "Enter number [1-$project_count]: " selection </dev/tty
+
+    if [[ ! "$selection" =~ ^[0-9]+$ ]] || [[ $selection -lt 1 ]] || [[ $selection -gt $project_count ]]; then
+        echo "Error: Invalid selection" >&2
+        return 1
+    fi
+
+    echo "$projects" | sed -n "${selection}p" | cut -d'|' -f1
+}
+
+# Resolve project ID from explicit flag, config, or interactive selection
+# Usage: _bwsh_get_project [explicit_project_id]
+_bwsh_get_project() {
+    local explicit_project="$1"
+
+    # Priority 1: Explicit flag
+    if [[ -n "$explicit_project" ]]; then
+        echo "$explicit_project"
+        return 0
+    fi
+
+    # Priority 2: Default from config
+    if [[ -n "${BWS_DEFAULT_PROJECT_ID:-}" ]]; then
+        echo "$BWS_DEFAULT_PROJECT_ID"
+        return 0
+    fi
+
+    # Priority 3: Interactive selection
+    _bwsh_select_project
+}
+
 # Check for required dependencies
 _bwsh_check_deps() {
     if ! command -v bws >/dev/null 2>&1; then
@@ -34,6 +98,79 @@ _bwsh_check_deps() {
     if ! command -v jq >/dev/null 2>&1; then
         echo "Error: jq not found" >&2
         echo "Install with: brew install jq" >&2
+        return 1
+    fi
+}
+
+# GitHub repo for updates
+BWSH_REPO="hex/bwsh"
+BWSH_RAW_URL="https://raw.githubusercontent.com/$BWSH_REPO/main/bin/bwsh"
+
+# Check for updates
+_bwsh_update_check() {
+    local remote_version
+    remote_version=$(curl -fsSL "$BWSH_RAW_URL" 2>/dev/null | grep -m1 'BWSH_VERSION=' | cut -d'"' -f2)
+
+    if [[ -z "$remote_version" ]]; then
+        echo "Error: Could not fetch remote version" >&2
+        return 1
+    fi
+
+    echo "Local:  $BWSH_VERSION"
+    echo "Remote: $remote_version"
+
+    if [[ "$BWSH_VERSION" == "$remote_version" ]]; then
+        echo "You're up to date."
+        return 0
+    else
+        echo "Update available. Run: bwsh update"
+        return 2
+    fi
+}
+
+# Update bwsh to latest version
+_bwsh_update() {
+    local check_only=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --check|-c)
+                check_only=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if [[ "$check_only" == true ]]; then
+        _bwsh_update_check
+        return $?
+    fi
+
+    echo "Checking for updates..."
+    local remote_version
+    remote_version=$(curl -fsSL "$BWSH_RAW_URL" 2>/dev/null | grep -m1 'BWSH_VERSION=' | cut -d'"' -f2)
+
+    if [[ -z "$remote_version" ]]; then
+        echo "Error: Could not fetch remote version" >&2
+        return 1
+    fi
+
+    if [[ "$BWSH_VERSION" == "$remote_version" ]]; then
+        echo "Already at latest version ($BWSH_VERSION)"
+        return 0
+    fi
+
+    echo "Updating from $BWSH_VERSION to $remote_version..."
+
+    # Download and run installer
+    local installer_url="https://raw.githubusercontent.com/$BWSH_REPO/main/install.sh"
+    if curl -fsSL "$installer_url" | bash; then
+        echo "Update complete. Restart your shell or run: source $(command -v bwsh)"
+    else
+        echo "Error: Update failed" >&2
         return 1
     fi
 }
@@ -126,11 +263,6 @@ bwkey() {
         esac
     done
 
-    # Use default project if not specified
-    if [[ -z "$project_id" ]]; then
-        project_id="${BWS_DEFAULT_PROJECT_ID}"
-    fi
-
     if [[ -z "$key_name" ]]; then
         echo "Usage: bwkey <key_name> [value] [--project <project_id>]" >&2
         return 1
@@ -141,11 +273,8 @@ bwkey() {
         return 1
     fi
 
-    if [[ -z "$project_id" ]]; then
-        echo "Error: No project specified and BWS_DEFAULT_PROJECT_ID not set" >&2
-        echo "Use --project <id> or run: bwsh setup" >&2
-        return 1
-    fi
+    # Resolve project: explicit flag > config > interactive selection
+    project_id=$(_bwsh_get_project "$project_id") || return 1
 
     # Prompt for value if not provided
     if [[ -z "$value" ]]; then
@@ -213,11 +342,32 @@ bwdelkey() {
 }
 
 # Run a command with secrets injected as environment variables
-# Usage: bwrun <command> [args...]
+# Usage: bwrun [--project <project_id>] <command> [args...]
 # Example: bwrun npm start
 bwrun() {
     _bwsh_load_config
-    local project_id="${BWS_DEFAULT_PROJECT_ID}"
+    local project_id=""
+    local -a cmd_args=()
+
+    # Parse arguments - collect command args after first non-flag
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --project|-p)
+                project_id="$2"
+                shift 2
+                ;;
+            -*)
+                # Unknown flag - might be for the command, pass it through
+                cmd_args+=("$1")
+                shift
+                ;;
+            *)
+                # First non-flag starts the command
+                cmd_args+=("$@")
+                break
+                ;;
+        esac
+    done
 
     if [[ -z "${BWS_ACCESS_TOKEN:-}" ]]; then
         echo "Error: BWS_ACCESS_TOKEN not set" >&2
@@ -225,19 +375,17 @@ bwrun() {
         return 1
     fi
 
-    if [[ -z "$project_id" ]]; then
-        echo "Error: BWS_DEFAULT_PROJECT_ID not set" >&2
-        echo "Run: bwsh setup" >&2
-        return 1
-    fi
-
-    if [[ $# -eq 0 ]]; then
-        echo "Usage: bwsh run <command> [args...]" >&2
+    if [[ ${#cmd_args[@]} -eq 0 ]]; then
+        echo "Usage: bwsh run [--project <project_id>] <command> [args...]" >&2
         echo "Example: bwsh run npm start" >&2
+        echo "         bwsh run -p <project_id> npm start" >&2
         return 1
     fi
 
-    exec bws run --project-id "$project_id" -- "$@"
+    # Resolve project: explicit flag > config > interactive selection
+    project_id=$(_bwsh_get_project "$project_id") || return 1
+
+    exec bws run --project-id "$project_id" -- "${cmd_args[@]}"
 }
 
 # Export secrets in .env format
@@ -265,12 +413,13 @@ bwenv() {
             echo "Usage: bwsh env <export|import> [args]" >&2
             echo "" >&2
             echo "Commands:" >&2
-            echo "  export              Export secrets as .env format (stdout)" >&2
-            echo "  import <file>       Import secrets from .env file" >&2
+            echo "  export                       Export secrets as .env format (stdout)" >&2
+            echo "  import <file> [-p <project>] Import secrets from .env file" >&2
             echo "" >&2
             echo "Examples:" >&2
             echo "  bwsh env export > .env.local" >&2
             echo "  bwsh env import .env" >&2
+            echo "  bwsh env import .env -p <project_id>" >&2
             echo "  bwsh env import .env --dry-run" >&2
             return 1
             ;;
@@ -279,12 +428,17 @@ bwenv() {
 
 # Import secrets from .env file
 _bwsh_env_import() {
-    local file="${1:-}"
+    local file=""
+    local project_id=""
     local dry_run=false
 
     # Parse args
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --project|-p)
+                project_id="$2"
+                shift 2
+                ;;
             --dry-run)
                 dry_run=true
                 shift
@@ -299,13 +453,18 @@ _bwsh_env_import() {
     done
 
     if [[ -z "$file" ]]; then
-        echo "Usage: bwsh env import <file> [--dry-run]" >&2
+        echo "Usage: bwsh env import <file> [--project <project_id>] [--dry-run]" >&2
         return 1
     fi
 
     if [[ ! -f "$file" ]]; then
         echo "Error: File not found: $file" >&2
         return 1
+    fi
+
+    # Resolve project once for all imports (avoid prompting per-secret)
+    if [[ "$dry_run" != true ]]; then
+        project_id=$(_bwsh_get_project "$project_id") || return 1
     fi
 
     local count=0
@@ -328,7 +487,7 @@ _bwsh_env_import() {
             if [[ "$dry_run" = true ]]; then
                 echo "[dry-run] Would import: $key"
             else
-                bwkey "$key" "$value"
+                bwkey "$key" "$value" --project "$project_id"
             fi
             ((count++))
         fi
@@ -375,26 +534,36 @@ _bwsh_setup() {
     # Load the token we just saved
     export BWS_ACCESS_TOKEN=$(cat "$BWSH_TOKEN_FILE")
 
-    # Project ID
+    # Project ID (optional)
     echo ""
     echo "Available projects:"
     bws project list 2>/dev/null | jq -r '.[] | "  \(.id)  \(.name)"' 2>/dev/null || {
         echo "  (Could not list projects - check your token)"
     }
     echo ""
+    echo "(Optional) Set a default project, or leave blank to select per-operation."
 
     if [[ -f "$BWSH_PROJECT_FILE" ]]; then
         echo "Project ID already configured: $(cat "$BWSH_PROJECT_FILE")"
-        read -p "Overwrite? [y/N] " overwrite
+        read -p "Overwrite? [y/N/clear] " overwrite
         if [[ "$overwrite" =~ ^[Yy]$ ]]; then
-            read -p "Enter default project ID: " project_id
-            echo "$project_id" > "$BWSH_PROJECT_FILE"
-            echo "Project ID saved."
+            read -p "Enter default project ID (or blank to skip): " project_id
+            if [[ -n "$project_id" ]]; then
+                echo "$project_id" > "$BWSH_PROJECT_FILE"
+                echo "Project ID saved."
+            fi
+        elif [[ "$overwrite" == "clear" ]]; then
+            rm -f "$BWSH_PROJECT_FILE"
+            echo "Default project cleared. You'll be prompted to select a project per-operation."
         fi
     else
-        read -p "Enter default project ID: " project_id
-        echo "$project_id" > "$BWSH_PROJECT_FILE"
-        echo "Project ID saved to $BWSH_PROJECT_FILE"
+        read -p "Enter default project ID (or blank to skip): " project_id
+        if [[ -n "$project_id" ]]; then
+            echo "$project_id" > "$BWSH_PROJECT_FILE"
+            echo "Project ID saved to $BWSH_PROJECT_FILE"
+        else
+            echo "No default project set. You'll be prompted to select a project per-operation."
+        fi
     fi
 
     echo ""
@@ -414,24 +583,31 @@ USAGE:
   source bwsh               Load functions into current shell
 
 COMMANDS:
-  get <name> [-p <project>]       Get a secret value
-  set <name> [val] [-p <project>] Create or update a secret
-  list                            List all secret names
-  delete <name>                   Delete a secret
-  run <cmd> [args...]       Run command with secrets as env vars
-  env export                Export secrets as .env format
-  env import <file>         Import secrets from .env file
-  setup                     Interactive configuration
-  version                   Show version
-  help                      Show this help
+  get <name> [-p <project>]           Get a secret value
+  set <name> [val] [-p <project>]     Create or update a secret
+  list                                List all secret names
+  delete <name>                       Delete a secret
+  run [-p <project>] <cmd> [args...]  Run command with secrets as env vars
+  env export                          Export secrets as .env format
+  env import <file> [-p <project>]    Import secrets from .env file
+  setup                               Interactive configuration
+  update [--check]                    Update to latest version
+  version                             Show version
+  help                                Show this help
+
+PROJECT RESOLUTION:
+  Commands that need a project use this priority:
+  1. Explicit -p/--project flag
+  2. Default project from config (BWS_DEFAULT_PROJECT_ID)
+  3. Interactive selection (prompts you to choose)
 
 SHELL FUNCTIONS (when sourced):
-  bwgetkey <name> [-p <project>]       Get a secret value
-  bwkey <name> [val] [-p <project>]    Create or update a secret
-  bwkeys                               List all secret names
-  bwdelkey <name>                      Delete a secret
-  bwrun <cmd> [args...]     Run command with secrets as env vars
-  bwenv export|import       Export/import .env files
+  bwgetkey <name> [-p <project>]          Get a secret value
+  bwkey <name> [val] [-p <project>]       Create or update a secret
+  bwkeys                                  List all secret names
+  bwdelkey <name>                         Delete a secret
+  bwrun [-p <project>] <cmd> [args...]    Run command with secrets as env vars
+  bwenv export|import                     Export/import .env files
 
 ENVIRONMENT VARIABLES:
   BWS_ACCESS_TOKEN          Bitwarden Secrets Manager access token
@@ -447,9 +623,11 @@ EXAMPLES:
   bwsh get DB_PASS -p abc123
   bwsh list
   bwsh delete API_KEY
-  bwsh run npm start          # Run with secrets injected
-  bwsh env export > .env      # Export to .env file
-  bwsh env import .env        # Import from .env file
+  bwsh run npm start                  # Run with secrets injected
+  bwsh run -p abc123 npm start        # Run with specific project
+  bwsh env export > .env              # Export to .env file
+  bwsh env import .env                # Import from .env file
+  bwsh env import .env -p abc123      # Import to specific project
 
   # Function mode (after sourcing)
   bwkey API_KEY sk-abc123
@@ -457,7 +635,8 @@ EXAMPLES:
   bwkey DB_PASS secret -p abc123      # Use specific project
   bwkeys
   bwdelkey API_KEY
-  bwrun python app.py         # Run with secrets injected
+  bwrun python app.py                 # Run with secrets injected
+  bwrun -p abc123 python app.py       # Run with specific project
 EOF
 }
 
@@ -487,6 +666,9 @@ _bwsh_cli() {
             ;;
         setup)
             _bwsh_setup
+            ;;
+        update)
+            _bwsh_update "$@"
             ;;
         version|-v|--version)
             echo "bwsh $BWSH_VERSION"

@@ -43,12 +43,14 @@ bwsh setup
 
 This will prompt you for:
 1. Your BWS access token (stored securely in `~/.config/bwsh/token`)
-2. Your default project ID (stored in `~/.config/bwsh/project`)
+2. Your default project ID (optional - stored in `~/.config/bwsh/project`)
+
+If you skip setting a default project, you'll be prompted to select one interactively when needed, or you can specify one with the `--project` flag.
 
 Alternatively, set environment variables:
 ```bash
 export BWS_ACCESS_TOKEN="your-token"
-export BWS_DEFAULT_PROJECT_ID="your-project-id"
+export BWS_DEFAULT_PROJECT_ID="your-project-id"  # optional
 ```
 
 ## Usage
@@ -61,6 +63,9 @@ Run any command with all secrets injected as environment variables:
 bwsh run npm start
 bwsh run python app.py
 bwsh run docker-compose up
+
+# Use a specific project
+bwsh run -p <project_id> npm start
 ```
 
 No `.env` file needed - secrets are injected directly into the subprocess.
@@ -73,6 +78,9 @@ bwsh env export > .env.local
 
 # Import secrets from .env file
 bwsh env import .env
+
+# Import to a specific project
+bwsh env import .env -p <project_id>
 
 # Preview what would be imported
 bwsh env import .env --dry-run
@@ -133,6 +141,16 @@ After installation, enable completions in your shell:
 fpath=(~/.zsh/completions $fpath)
 autoload -Uz compinit && compinit
 ```
+
+### Project Resolution
+
+Commands that create secrets (`set`, `run`, `env import`) need a project. Projects are resolved in this order:
+
+1. **Explicit flag** (`--project` or `-p`) - highest priority
+2. **Default project** from config (`BWS_DEFAULT_PROJECT_ID`)
+3. **Interactive selection** - if no default is set, you'll be prompted to choose
+
+If you have only one project, it will be auto-selected without prompting.
 
 ## Environment Variables
 
