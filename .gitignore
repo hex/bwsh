@@ -1,0 +1,19 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Secrets (should never be committed)
+*.token
+*.secret
+.env
+
+# Test files
+test-*
+*.test

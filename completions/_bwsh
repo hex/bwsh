@@ -1,0 +1,93 @@
+#compdef bwsh bwgetkey bwkey bwkeys bwdelkey
+# ABOUTME: Zsh completion script for bwsh (Bitwarden Secrets Manager wrapper)
+# ABOUTME: Provides tab-completion for commands and secret names
+
+# Helper: get secret names
+_bwsh_secrets() {
+    local -a secrets
+    if command -v bwsh >/dev/null 2>&1; then
+        secrets=(${(f)"$(bwsh list 2>/dev/null)"})
+    fi
+    compadd -a secrets
+}
+
+# Main bwsh completion
+_bwsh() {
+    local curcontext="$curcontext" state line
+    typeset -A opt_args
+
+    # Commands with descriptions
+    local -a commands
+    commands=(
+        'get:Get a secret value'
+        'set:Create or update a secret'
+        'list:List all secret names'
+        'delete:Delete a secret'
+        'setup:Interactive configuration'
+        'version:Show version'
+        'help:Show help'
+    )
+
+    # First argument: command
+    if [[ $CURRENT -eq 2 ]]; then
+        _describe 'command' commands
+        return
+    fi
+
+    # Subsequent arguments depend on command
+    local cmd="${words[2]}"
+    case "$cmd" in
+        get|delete)
+            _bwsh_secrets
+            ;;
+        set)
+            if [[ $CURRENT -eq 3 ]]; then
+                _bwsh_secrets
+            fi
+            # Value argument: no completion
+            ;;
+    esac
+
+    return 1
+}
+
+# bwgetkey completion
+_bwgetkey() {
+    _bwsh_secrets
+}
+
+# bwkey completion (first arg only)
+_bwkey() {
+    if [[ $CURRENT -eq 2 ]]; then
+        _bwsh_secrets
+    fi
+}
+
+# bwdelkey completion
+_bwdelkey() {
+    _bwsh_secrets
+}
+
+# bwkeys - no arguments
+_bwkeys() {
+    return 1
+}
+
+# Service dispatch
+case "$service" in
+    bwsh)
+        _bwsh "$@"
+        ;;
+    bwgetkey)
+        _bwgetkey "$@"
+        ;;
+    bwkey)
+        _bwkey "$@"
+        ;;
+    bwkeys)
+        _bwkeys "$@"
+        ;;
+    bwdelkey)
+        _bwdelkey "$@"
+        ;;
+esac

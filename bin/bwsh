@@ -1,0 +1,325 @@
+#!/usr/bin/env bash
+# ABOUTME: Shell wrapper for Bitwarden Secrets Manager CLI (bws)
+# ABOUTME: Can be sourced for functions or executed as CLI
+
+# Version
+BWSH_VERSION="1.0.0"
+
+# Configuration
+# Default project ID - set this after creating your project in Bitwarden
+# Find your project ID with: bws project list
+export BWS_DEFAULT_PROJECT_ID="${BWS_DEFAULT_PROJECT_ID:-}"
+
+# Token file location
+BWSH_TOKEN_FILE="${BWSH_TOKEN_FILE:-$HOME/.config/bwsh/token}"
+BWSH_PROJECT_FILE="${BWSH_PROJECT_FILE:-$HOME/.config/bwsh/project}"
+
+# Load token from file if not set in environment
+_bwsh_load_config() {
+    if [[ -z "${BWS_ACCESS_TOKEN:-}" ]] && [[ -f "$BWSH_TOKEN_FILE" ]]; then
+        export BWS_ACCESS_TOKEN=$(cat "$BWSH_TOKEN_FILE")
+    fi
+    if [[ -z "${BWS_DEFAULT_PROJECT_ID:-}" ]] && [[ -f "$BWSH_PROJECT_FILE" ]]; then
+        export BWS_DEFAULT_PROJECT_ID=$(cat "$BWSH_PROJECT_FILE")
+    fi
+}
+
+# Check for required dependencies
+_bwsh_check_deps() {
+    if ! command -v bws >/dev/null 2>&1; then
+        echo "Error: bws (Bitwarden Secrets Manager CLI) not found" >&2
+        echo "Install from: https://bitwarden.com/help/secrets-manager-cli/" >&2
+        return 1
+    fi
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq not found" >&2
+        echo "Install with: brew install jq" >&2
+        return 1
+    fi
+}
+
+# Retrieve a secret by key name
+# Usage: bwgetkey <key_name>
+# Example: bwgetkey ANTHROPIC_API_KEY
+bwgetkey() {
+    _bwsh_load_config
+    local key_name="$1"
+
+    if [[ -z "$key_name" ]]; then
+        echo "Usage: bwgetkey <key_name>" >&2
+        return 1
+    fi
+
+    if [[ -z "${BWS_ACCESS_TOKEN:-}" ]]; then
+        echo "Error: BWS_ACCESS_TOKEN not set" >&2
+        echo "Set it with: export BWS_ACCESS_TOKEN='your-token'" >&2
+        echo "Or run: bwsh setup" >&2
+        return 1
+    fi
+
+    # List all secrets and filter by key name, extract value
+    local result
+    result=$(bws secret list 2>/dev/null | jq -r ".[] | select(.key==\"$key_name\") | .value" 2>/dev/null)
+
+    if [[ -z "$result" ]]; then
+        echo "Error: Secret '$key_name' not found" >&2
+        return 1
+    fi
+
+    echo "$result"
+}
+
+# Store a secret
+# Usage: bwkey <key_name> [value]
+# If value is omitted, prompts securely
+# Example: bwkey ANTHROPIC_API_KEY sk-ant-...
+bwkey() {
+    _bwsh_load_config
+    local key_name="$1"
+    local value="${2:-}"
+    local project_id="${BWS_DEFAULT_PROJECT_ID}"
+
+    if [[ -z "$key_name" ]]; then
+        echo "Usage: bwkey <key_name> [value]" >&2
+        return 1
+    fi
+
+    if [[ -z "${BWS_ACCESS_TOKEN:-}" ]]; then
+        echo "Error: BWS_ACCESS_TOKEN not set" >&2
+        return 1
+    fi
+
+    if [[ -z "$project_id" ]]; then
+        echo "Error: BWS_DEFAULT_PROJECT_ID not set" >&2
+        echo "Find your project ID with: bws project list" >&2
+        echo "Then set: export BWS_DEFAULT_PROJECT_ID='your-project-id'" >&2
+        echo "Or run: bwsh setup" >&2
+        return 1
+    fi
+
+    # Prompt for value if not provided
+    if [[ -z "$value" ]]; then
+        read -s -p "Enter value for $key_name: " value
+        echo
+    fi
+
+    # Check if secret already exists
+    local existing_id
+    existing_id=$(bws secret list 2>/dev/null | jq -r ".[] | select(.key==\"$key_name\") | .id" 2>/dev/null)
+
+    if [[ -n "$existing_id" ]]; then
+        # Update existing secret
+        bws secret edit "$existing_id" --value "$value" >/dev/null
+        echo "Updated secret: $key_name"
+    else
+        # Create new secret
+        bws secret create "$key_name" "$value" "$project_id" >/dev/null
+        echo "Created secret: $key_name"
+    fi
+}
+
+# List all secrets (names only, no values)
+# Usage: bwkeys
+bwkeys() {
+    _bwsh_load_config
+    if [[ -z "${BWS_ACCESS_TOKEN:-}" ]]; then
+        echo "Error: BWS_ACCESS_TOKEN not set" >&2
+        return 1
+    fi
+
+    bws secret list 2>/dev/null | jq -r '.[].key' | sort
+}
+
+# Delete a secret by key name
+# Usage: bwdelkey <key_name>
+bwdelkey() {
+    _bwsh_load_config
+    local key_name="$1"
+
+    if [[ -z "$key_name" ]]; then
+        echo "Usage: bwdelkey <key_name>" >&2
+        return 1
+    fi
+
+    if [[ -z "${BWS_ACCESS_TOKEN:-}" ]]; then
+        echo "Error: BWS_ACCESS_TOKEN not set" >&2
+        return 1
+    fi
+
+    local secret_id
+    secret_id=$(bws secret list 2>/dev/null | jq -r ".[] | select(.key==\"$key_name\") | .id" 2>/dev/null)
+
+    if [[ -z "$secret_id" ]]; then
+        echo "Error: Secret '$key_name' not found" >&2
+        return 1
+    fi
+
+    bws secret delete "$secret_id" >/dev/null
+    echo "Deleted secret: $key_name"
+}
+
+# Interactive setup
+_bwsh_setup() {
+    echo "bwsh setup"
+    echo "=========="
+    echo ""
+
+    _bwsh_check_deps || return 1
+
+    mkdir -p "$(dirname "$BWSH_TOKEN_FILE")"
+
+    # Access token
+    if [[ -f "$BWSH_TOKEN_FILE" ]]; then
+        echo "Access token already configured at $BWSH_TOKEN_FILE"
+        read -p "Overwrite? [y/N] " overwrite
+        if [[ "$overwrite" =~ ^[Yy]$ ]]; then
+            read -s -p "Enter BWS access token: " token
+            echo
+            echo "$token" > "$BWSH_TOKEN_FILE"
+            chmod 600 "$BWSH_TOKEN_FILE"
+            echo "Token saved."
+        fi
+    else
+        read -s -p "Enter BWS access token: " token
+        echo
+        echo "$token" > "$BWSH_TOKEN_FILE"
+        chmod 600 "$BWSH_TOKEN_FILE"
+        echo "Token saved to $BWSH_TOKEN_FILE"
+    fi
+
+    # Load the token we just saved
+    export BWS_ACCESS_TOKEN=$(cat "$BWSH_TOKEN_FILE")
+
+    # Project ID
+    echo ""
+    echo "Available projects:"
+    bws project list 2>/dev/null | jq -r '.[] | "  \(.id)  \(.name)"' 2>/dev/null || {
+        echo "  (Could not list projects - check your token)"
+    }
+    echo ""
+
+    if [[ -f "$BWSH_PROJECT_FILE" ]]; then
+        echo "Project ID already configured: $(cat "$BWSH_PROJECT_FILE")"
+        read -p "Overwrite? [y/N] " overwrite
+        if [[ "$overwrite" =~ ^[Yy]$ ]]; then
+            read -p "Enter default project ID: " project_id
+            echo "$project_id" > "$BWSH_PROJECT_FILE"
+            echo "Project ID saved."
+        fi
+    else
+        read -p "Enter default project ID: " project_id
+        echo "$project_id" > "$BWSH_PROJECT_FILE"
+        echo "Project ID saved to $BWSH_PROJECT_FILE"
+    fi
+
+    echo ""
+    echo "Setup complete!"
+    echo ""
+    echo "To enable shell functions, add to your shell rc file:"
+    echo "  source $(command -v bwsh 2>/dev/null || echo '~/.local/bin/bwsh')"
+}
+
+# Show help
+_bwsh_help() {
+    cat <<'EOF'
+bwsh - Shell wrapper for Bitwarden Secrets Manager
+
+USAGE:
+  bwsh <command> [args]     Run as CLI
+  source bwsh               Load functions into current shell
+
+COMMANDS:
+  get <name>                Get a secret value
+  set <name> [value]        Create or update a secret (prompts if value omitted)
+  list                      List all secret names
+  delete <name>             Delete a secret
+  setup                     Interactive configuration
+  version                   Show version
+  help                      Show this help
+
+SHELL FUNCTIONS (when sourced):
+  bwgetkey <name>           Get a secret value
+  bwkey <name> [value]      Create or update a secret
+  bwkeys                    List all secret names
+  bwdelkey <name>           Delete a secret
+
+ENVIRONMENT VARIABLES:
+  BWS_ACCESS_TOKEN          Bitwarden Secrets Manager access token
+  BWS_DEFAULT_PROJECT_ID    Default project ID for creating secrets
+  BWSH_TOKEN_FILE           Token file path (default: ~/.config/bwsh/token)
+  BWSH_PROJECT_FILE         Project file path (default: ~/.config/bwsh/project)
+
+EXAMPLES:
+  # CLI mode
+  bwsh set API_KEY sk-abc123
+  bwsh get API_KEY
+  bwsh list
+  bwsh delete API_KEY
+
+  # Function mode (after sourcing)
+  bwkey API_KEY sk-abc123
+  bwgetkey API_KEY
+  bwkeys
+  bwdelkey API_KEY
+EOF
+}
+
+# CLI mode handler
+_bwsh_cli() {
+    local cmd="${1:-}"
+    shift || true
+
+    case "$cmd" in
+        get)
+            bwgetkey "$@"
+            ;;
+        set)
+            bwkey "$@"
+            ;;
+        list|ls)
+            bwkeys
+            ;;
+        delete|rm)
+            bwdelkey "$@"
+            ;;
+        setup)
+            _bwsh_setup
+            ;;
+        version|-v|--version)
+            echo "bwsh $BWSH_VERSION"
+            ;;
+        help|-h|--help)
+            _bwsh_help
+            ;;
+        "")
+            _bwsh_help
+            ;;
+        *)
+            echo "Unknown command: $cmd" >&2
+            echo "Run 'bwsh help' for usage" >&2
+            return 1
+            ;;
+    esac
+}
+
+# Detect if script is being sourced or executed
+# When sourced: just export functions (already defined above)
+# When executed: run CLI handler
+_bwsh_is_sourced() {
+    if [[ -n "${ZSH_VERSION:-}" ]]; then
+        # Zsh: $0 contains script path when executed, function name when sourced
+        [[ "$ZSH_EVAL_CONTEXT" == *:file:* ]]
+    elif [[ -n "${BASH_VERSION:-}" ]]; then
+        # Bash: BASH_SOURCE[0] != $0 when sourced
+        [[ "${BASH_SOURCE[0]}" != "$0" ]]
+    else
+        # Fallback: assume executed
+        return 1
+    fi
+}
+
+if ! _bwsh_is_sourced; then
+    # Script is being executed directly - enable strict mode
+    set -euo pipefail
+    _bwsh_cli "$@"
+fi
