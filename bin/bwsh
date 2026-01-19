@@ -3,7 +3,7 @@
 # ABOUTME: Can be sourced for functions or executed as CLI
 
 # Version
-BWSH_VERSION="2026.1.0"
+BWSH_VERSION="2026.1.1"
 
 # Configuration
 # Default project ID - set this after creating your project in Bitwarden
@@ -67,15 +67,40 @@ _bwsh_select_project() {
     echo "$projects" | sed -n "${selection}p" | cut -d'|' -f1
 }
 
+# Resolve project name to ID
+# Accepts UUID (returned as-is) or name (looked up case-insensitively)
+# Usage: _bwsh_resolve_project <name_or_id>
+_bwsh_resolve_project() {
+    local input="$1"
+
+    # If it looks like a UUID, return as-is
+    if [[ "$input" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+        echo "$input"
+        return 0
+    fi
+
+    # Look up by name (case-insensitive)
+    local project_id
+    project_id=$(bws project list 2>/dev/null | jq -r ".[] | select(.name | ascii_downcase == \"$(echo "$input" | tr '[:upper:]' '[:lower:]')\") | .id" 2>/dev/null)
+
+    if [[ -z "$project_id" ]]; then
+        echo "Error: Project '$input' not found" >&2
+        return 1
+    fi
+
+    echo "$project_id"
+}
+
 # Resolve project ID from explicit flag, config, or interactive selection
-# Usage: _bwsh_get_project [explicit_project_id]
+# Usage: _bwsh_get_project [explicit_project]
+# Accepts project name or UUID for explicit_project
 _bwsh_get_project() {
     local explicit_project="$1"
 
-    # Priority 1: Explicit flag
+    # Priority 1: Explicit flag (resolve name to ID if needed)
     if [[ -n "$explicit_project" ]]; then
-        echo "$explicit_project"
-        return 0
+        _bwsh_resolve_project "$explicit_project"
+        return $?
     fi
 
     # Priority 2: Default from config
@@ -215,10 +240,16 @@ bwgetkey() {
         return 1
     fi
 
+    # Resolve project name to ID if specified
+    local resolved_project=""
+    if [[ -n "$project_id" ]]; then
+        resolved_project=$(_bwsh_resolve_project "$project_id") || return 1
+    fi
+
     # List secrets (optionally filtered by project) and extract value by key name
     local result
-    if [[ -n "$project_id" ]]; then
-        result=$(bws secret list "$project_id" 2>/dev/null | jq -r ".[] | select(.key==\"$key_name\") | .value" 2>/dev/null)
+    if [[ -n "$resolved_project" ]]; then
+        result=$(bws secret list "$resolved_project" 2>/dev/null | jq -r ".[] | select(.key==\"$key_name\") | .value" 2>/dev/null)
     else
         result=$(bws secret list 2>/dev/null | jq -r ".[] | select(.key==\"$key_name\") | .value" 2>/dev/null)
     fi
