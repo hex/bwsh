@@ -198,6 +198,19 @@ Commands that create secrets (`set`, `run`, `env import`) need a project. Projec
 
 If you have only one project, it will be auto-selected without prompting.
 
+### Uninstall
+
+```bash
+bwsh uninstall          # Remove bwsh, keep config and cache
+bwsh uninstall --force  # Remove everything including credentials
+```
+
+After uninstalling, remove these lines from your shell rc file:
+```bash
+source ~/.local/bin/bwsh
+bwsh_load
+```
+
 ## Environment Variables
 
 | Variable | Description | Default |
