@@ -5,6 +5,12 @@
 # Version
 BWSH_VERSION="2026.2.0"
 
+# Colors
+GREEN='\033[38;2;158;206;106m'
+PURPLE='\033[38;2;187;154;247m'
+COMMENT='\033[38;2;86;95;137m'
+NC='\033[0m'
+
 # Configuration
 # Default project ID - set this after creating your project in Bitwarden
 # Find your project ID with: bws project list
@@ -271,15 +277,21 @@ bwsh_load() {
 BWSH_REPO="hex/bwsh"
 BWSH_RAW_URL="https://raw.githubusercontent.com/$BWSH_REPO/main/bin/bwsh"
 
+# Fetch remote version from GitHub
+_bwsh_get_remote_version() {
+    local remote_script cache_bust
+    cache_bust=$(date +%s)
+    remote_script=$(curl -fsSL "${BWSH_RAW_URL}?cb=$cache_bust" 2>/dev/null) || return 1
+    echo "$remote_script" | grep -m1 'BWSH_VERSION=' | cut -d'"' -f2
+}
+
 # Check for updates
 _bwsh_update_check() {
     local remote_version
-    remote_version=$(curl -fsSL "$BWSH_RAW_URL" 2>/dev/null | grep -m1 'BWSH_VERSION=' | cut -d'"' -f2)
-
-    if [[ -z "$remote_version" ]]; then
+    remote_version=$(_bwsh_get_remote_version) || {
         echo "Error: Could not fetch remote version" >&2
         return 1
-    fi
+    }
 
     echo "Local:  $BWSH_VERSION"
     echo "Remote: $remote_version"
@@ -314,30 +326,34 @@ _bwsh_update() {
         return $?
     fi
 
-    echo "Checking for updates..."
     local remote_version
-    remote_version=$(curl -fsSL "$BWSH_RAW_URL" 2>/dev/null | grep -m1 'BWSH_VERSION=' | cut -d'"' -f2)
-
-    if [[ -z "$remote_version" ]]; then
+    remote_version=$(_bwsh_get_remote_version) || {
         echo "Error: Could not fetch remote version" >&2
         return 1
-    fi
+    }
 
     if [[ "$BWSH_VERSION" == "$remote_version" ]]; then
-        echo "Already at latest version ($BWSH_VERSION)"
+        echo -e "${COMMENT}Already up to date${NC} (${GREEN}$BWSH_VERSION${NC})"
         return 0
     fi
 
-    echo "Updating from $BWSH_VERSION to $remote_version..."
+    echo ""
+    echo -e "   ${COMMENT}Updating${NC} bwsh ${COMMENT}from${NC} ${PURPLE}$BWSH_VERSION${NC} ${COMMENT}→${NC} ${GREEN}$remote_version${NC}"
+    echo ""
 
-    # Download and run installer
-    local installer_url="https://raw.githubusercontent.com/$BWSH_REPO/main/install.sh"
-    if curl -fsSL "$installer_url" | bash; then
-        echo "Update complete. Restart your shell or run: source $(command -v bwsh)"
-    else
-        echo "Error: Update failed" >&2
+    # Download installer script
+    local install_script cache_bust
+    cache_bust=$(date +%s)
+    install_script=$(curl -fsSL "https://raw.githubusercontent.com/$BWSH_REPO/main/install.sh?cb=$cache_bust" 2>/dev/null) || {
+        echo "Error: Failed to download installer" >&2
         return 1
-    fi
+    }
+
+    # Run the installer
+    bash -c "$install_script"
+
+    # Exit to prevent reading old script
+    exit 0
 }
 
 # Retrieve a secret by key name
