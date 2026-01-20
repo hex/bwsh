@@ -8,6 +8,7 @@ Simplifies local development by letting you manage secrets by name (not UUID), r
 
 - [bws](https://bitwarden.com/help/secrets-manager-cli/) - Bitwarden Secrets Manager CLI
 - [jq](https://jqlang.github.io/jq/) - JSON processor
+- [age](https://github.com/FiloSottile/age) - Modern encryption tool (optional, for local caching)
 - A Bitwarden Secrets Manager account with an access token
 
 ## Installation
@@ -125,7 +126,52 @@ bwkeys                     # List
 bwdelkey API_KEY           # Delete
 bwrun npm start            # Run with secrets
 bwenv export               # Export .env
+bwsh_load                  # Load all secrets from cache
 ```
+
+### Encrypted Caching
+
+For faster shell startup, bwsh can cache secrets locally with age encryption. Instead of making 14+ API calls at startup, it fetches once and caches.
+
+**First, install age:**
+```bash
+brew install age
+```
+
+**Replace individual exports in your shell rc:**
+```bash
+# Before (slow - 14 API calls):
+export ANTHROPIC_API_KEY=$(bwgetkey ANTHROPIC_API_KEY)
+export OPENAI_API_KEY=$(bwgetkey OPENAI_API_KEY)
+# ... more keys
+
+# After (fast - 0-1 API calls):
+source ~/.local/bin/bwsh
+bwsh_load
+```
+
+**How it works:**
+1. First load: fetches all secrets from bws, encrypts with age, stores locally
+2. Subsequent loads: decrypts from local cache (instant)
+3. Cache auto-refreshes when TTL expires (default: 1 hour)
+
+**Cache management:**
+```bash
+bwsh cache status    # Check cache state
+bwsh cache refresh   # Force refresh now
+bwsh cache clear     # Delete local cache
+```
+
+**Configuration:**
+```bash
+export BWSH_CACHE_TTL=7200  # 2 hour TTL (default: 3600)
+```
+
+**Security:**
+- Cache is encrypted with age (ChaCha20-Poly1305)
+- Age key stored at `~/.config/bwsh/age.key` (chmod 600)
+- Cache stored at `~/.cache/bwsh/secrets.age`
+- If bws is unavailable, stale cache is used with a warning
 
 ### Tab Completion
 
@@ -160,6 +206,8 @@ If you have only one project, it will be auto-selected without prompting.
 | `BWS_DEFAULT_PROJECT_ID` | Default project ID for creating secrets | (from config file) |
 | `BWSH_TOKEN_FILE` | Path to token file | `~/.config/bwsh/token` |
 | `BWSH_PROJECT_FILE` | Path to project ID file | `~/.config/bwsh/project` |
+| `BWSH_CACHE_DIR` | Cache directory | `~/.cache/bwsh` |
+| `BWSH_CACHE_TTL` | Cache TTL in seconds | `3600` |
 
 ## Files
 
@@ -167,6 +215,8 @@ If you have only one project, it will be auto-selected without prompting.
 ~/.local/bin/bwsh              # Main script
 ~/.config/bwsh/token           # Access token (chmod 600)
 ~/.config/bwsh/project         # Default project ID
+~/.config/bwsh/age.key         # Age encryption key (chmod 600)
+~/.cache/bwsh/secrets.age      # Encrypted secrets cache
 ~/.bash_completion.d/bwsh.bash # Bash completions
 ~/.zsh/completions/_bwsh       # Zsh completions
 ```

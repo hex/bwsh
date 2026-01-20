@@ -14,6 +14,12 @@ export BWS_DEFAULT_PROJECT_ID="${BWS_DEFAULT_PROJECT_ID:-}"
 BWSH_TOKEN_FILE="${BWSH_TOKEN_FILE:-$HOME/.config/bwsh/token}"
 BWSH_PROJECT_FILE="${BWSH_PROJECT_FILE:-$HOME/.config/bwsh/project}"
 
+# Cache configuration
+BWSH_CACHE_DIR="${BWSH_CACHE_DIR:-$HOME/.cache/bwsh}"
+BWSH_CACHE_FILE="$BWSH_CACHE_DIR/secrets.age"
+BWSH_AGE_KEY="$HOME/.config/bwsh/age.key"
+BWSH_CACHE_TTL="${BWSH_CACHE_TTL:-3600}"  # 1 hour default
+
 # Load token from file if not set in environment
 _bwsh_load_config() {
     if [[ -z "${BWS_ACCESS_TOKEN:-}" ]] && [[ -f "$BWSH_TOKEN_FILE" ]]; then
@@ -123,6 +129,140 @@ _bwsh_check_deps() {
     if ! command -v jq >/dev/null 2>&1; then
         echo "Error: jq not found" >&2
         echo "Install with: brew install jq" >&2
+        return 1
+    fi
+}
+
+# Check if age is installed (required for caching)
+_bwsh_check_age() {
+    if ! command -v age >/dev/null 2>&1; then
+        echo "Error: age not found (required for encrypted caching)" >&2
+        echo "" >&2
+        echo "Install with: brew install age" >&2
+        echo "More info: https://github.com/FiloSottile/age" >&2
+        return 1
+    fi
+}
+
+# Initialize age key if not exists
+_bwsh_init_age_key() {
+    if [[ -f "$BWSH_AGE_KEY" ]]; then
+        return 0
+    fi
+
+    _bwsh_check_age || return 1
+
+    mkdir -p "$(dirname "$BWSH_AGE_KEY")"
+    age-keygen -o "$BWSH_AGE_KEY" 2>/dev/null
+    chmod 600 "$BWSH_AGE_KEY"
+    echo "Created age key: $BWSH_AGE_KEY" >&2
+}
+
+# Get age public key from private key file
+_bwsh_age_pubkey() {
+    grep -o 'age1[a-z0-9]*' "$BWSH_AGE_KEY" 2>/dev/null || \
+        age-keygen -y "$BWSH_AGE_KEY" 2>/dev/null
+}
+
+# Refresh the encrypted secrets cache
+_bwsh_cache_refresh() {
+    _bwsh_load_config
+    _bwsh_check_age || return 1
+    _bwsh_init_age_key || return 1
+
+    if [[ -z "${BWS_ACCESS_TOKEN:-}" ]]; then
+        echo "Error: BWS_ACCESS_TOKEN not set" >&2
+        echo "Run: bwsh setup" >&2
+        return 1
+    fi
+
+    mkdir -p "$BWSH_CACHE_DIR"
+
+    local pubkey
+    pubkey=$(_bwsh_age_pubkey) || {
+        echo "Error: Could not get age public key" >&2
+        return 1
+    }
+
+    # Fetch all secrets and convert to shell exports, then encrypt
+    local secrets
+    secrets=$(bws secret list 2>/dev/null | jq -r '.[] | "export \(.key)=\(.value | @sh)"' 2>/dev/null) || {
+        echo "Error: Failed to fetch secrets from bws" >&2
+        return 1
+    }
+
+    if [[ -z "$secrets" ]]; then
+        echo "Warning: No secrets found" >&2
+        return 0
+    fi
+
+    echo "$secrets" | age -e -r "$pubkey" -o "$BWSH_CACHE_FILE" || {
+        echo "Error: Failed to encrypt cache" >&2
+        return 1
+    }
+
+    chmod 600 "$BWSH_CACHE_FILE"
+    echo "Cache refreshed: $(echo "$secrets" | wc -l | tr -d ' ') secrets" >&2
+}
+
+# Get cache age in seconds
+_bwsh_cache_age() {
+    if [[ ! -f "$BWSH_CACHE_FILE" ]]; then
+        echo "999999"
+        return
+    fi
+
+    local file_mtime now
+    if [[ "$(uname)" == "Darwin" ]]; then
+        file_mtime=$(stat -f%m "$BWSH_CACHE_FILE")
+    else
+        file_mtime=$(stat -c%Y "$BWSH_CACHE_FILE")
+    fi
+    now=$(date +%s)
+    echo $((now - file_mtime))
+}
+
+# Load secrets from encrypted cache
+_bwsh_cache_load() {
+    if [[ ! -f "$BWSH_CACHE_FILE" ]]; then
+        return 1
+    fi
+
+    if [[ ! -f "$BWSH_AGE_KEY" ]]; then
+        echo "Warning: age key not found, cannot decrypt cache" >&2
+        return 1
+    fi
+
+    _bwsh_check_age || return 1
+
+    local secrets
+    secrets=$(age -d -i "$BWSH_AGE_KEY" "$BWSH_CACHE_FILE" 2>/dev/null) || {
+        echo "Warning: Failed to decrypt cache" >&2
+        return 1
+    }
+
+    eval "$secrets"
+}
+
+# Load secrets with caching (main entry point for shell startup)
+bwsh_load() {
+    local cache_age
+    cache_age=$(_bwsh_cache_age)
+
+    if [[ $cache_age -le $BWSH_CACHE_TTL ]] && [[ -f "$BWSH_CACHE_FILE" ]]; then
+        # Cache is fresh, load from it
+        _bwsh_cache_load && return 0
+    fi
+
+    # Cache is stale or missing, try to refresh
+    if _bwsh_cache_refresh 2>/dev/null; then
+        _bwsh_cache_load
+    elif [[ -f "$BWSH_CACHE_FILE" ]]; then
+        # Refresh failed but we have stale cache, use it
+        echo "Warning: Using stale cache (refresh failed)" >&2
+        _bwsh_cache_load
+    else
+        echo "Error: No cache available and refresh failed" >&2
         return 1
     fi
 }
@@ -604,6 +744,74 @@ _bwsh_setup() {
     echo "  source $(command -v bwsh 2>/dev/null || echo '~/.local/bin/bwsh')"
 }
 
+# Cache management command
+_bwsh_cache() {
+    local subcmd="${1:-}"
+    shift || true
+
+    case "$subcmd" in
+        refresh)
+            _bwsh_cache_refresh
+            ;;
+        clear)
+            if [[ -f "$BWSH_CACHE_FILE" ]]; then
+                rm -f "$BWSH_CACHE_FILE"
+                echo "Cache cleared"
+            else
+                echo "No cache to clear"
+            fi
+            ;;
+        status)
+            echo "Cache file: $BWSH_CACHE_FILE"
+            echo "Cache TTL: ${BWSH_CACHE_TTL}s"
+            echo "Age key: $BWSH_AGE_KEY"
+            echo ""
+
+            if [[ -f "$BWSH_CACHE_FILE" ]]; then
+                local age
+                age=$(_bwsh_cache_age)
+                local size
+                size=$(ls -lh "$BWSH_CACHE_FILE" | awk '{print $5}')
+                echo "Status: cached"
+                echo "Age: ${age}s (TTL: ${BWSH_CACHE_TTL}s)"
+                echo "Size: $size"
+                if [[ $age -gt $BWSH_CACHE_TTL ]]; then
+                    echo "State: stale (will refresh on next load)"
+                else
+                    echo "State: fresh"
+                fi
+            else
+                echo "Status: no cache"
+            fi
+
+            if [[ -f "$BWSH_AGE_KEY" ]]; then
+                echo ""
+                echo "Age key: present"
+            else
+                echo ""
+                echo "Age key: not initialized"
+            fi
+
+            if command -v age >/dev/null 2>&1; then
+                echo "Age: installed ($(age --version 2>/dev/null || echo 'unknown version'))"
+            else
+                echo "Age: NOT INSTALLED"
+                echo "  Install with: brew install age"
+                echo "  More info: https://github.com/FiloSottile/age"
+            fi
+            ;;
+        *)
+            echo "Usage: bwsh cache <refresh|clear|status>" >&2
+            echo "" >&2
+            echo "Commands:" >&2
+            echo "  refresh   Fetch secrets from bws and update encrypted cache" >&2
+            echo "  clear     Delete the local cache" >&2
+            echo "  status    Show cache information" >&2
+            return 1
+            ;;
+    esac
+}
+
 # Show help
 _bwsh_help() {
     cat <<'EOF'
@@ -621,6 +829,10 @@ COMMANDS:
   run [-p <project>] <cmd> [args...]  Run command with secrets as env vars
   env export                          Export secrets as .env format
   env import <file> [-p <project>]    Import secrets from .env file
+  cache refresh                       Refresh encrypted local cache
+  cache clear                         Delete local cache
+  cache status                        Show cache information
+  load                                Load secrets from cache (for shell startup)
   setup                               Interactive configuration
   update [--check]                    Update to latest version
   version                             Show version
@@ -633,6 +845,7 @@ PROJECT RESOLUTION:
   3. Interactive selection (prompts you to choose)
 
 SHELL FUNCTIONS (when sourced):
+  bwsh_load                               Load all secrets from encrypted cache
   bwgetkey <name> [-p <project>]          Get a secret value
   bwkey <name> [val] [-p <project>]       Create or update a secret
   bwkeys                                  List all secret names
@@ -645,6 +858,8 @@ ENVIRONMENT VARIABLES:
   BWS_DEFAULT_PROJECT_ID    Default project ID for creating secrets
   BWSH_TOKEN_FILE           Token file path (default: ~/.config/bwsh/token)
   BWSH_PROJECT_FILE         Project file path (default: ~/.config/bwsh/project)
+  BWSH_CACHE_DIR            Cache directory (default: ~/.cache/bwsh)
+  BWSH_CACHE_TTL            Cache TTL in seconds (default: 3600)
 
 EXAMPLES:
   # CLI mode
@@ -659,6 +874,8 @@ EXAMPLES:
   bwsh env export > .env              # Export to .env file
   bwsh env import .env                # Import from .env file
   bwsh env import .env -p abc123      # Import to specific project
+  bwsh cache status                   # Check cache state
+  bwsh cache refresh                  # Force refresh cache
 
   # Function mode (after sourcing)
   bwkey API_KEY sk-abc123
@@ -694,6 +911,12 @@ _bwsh_cli() {
             ;;
         env)
             bwenv "$@"
+            ;;
+        cache)
+            _bwsh_cache "$@"
+            ;;
+        load)
+            bwsh_load
             ;;
         setup)
             _bwsh_setup
