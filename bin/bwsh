@@ -3,11 +3,12 @@
 # ABOUTME: Can be sourced for functions or executed as CLI
 
 # Version
-BWSH_VERSION="2026.2.1"
+BWSH_VERSION="2026.2.2"
 
-# Colors
+# Colors - warm palette (orange/gold)
 GREEN='\033[38;2;158;206;106m'
-PURPLE='\033[38;2;187;154;247m'
+ORANGE='\033[38;2;255;158;100m'
+GOLD='\033[38;2;255;199;119m'
 COMMENT='\033[38;2;86;95;137m'
 NC='\033[0m'
 
@@ -338,7 +339,7 @@ _bwsh_update() {
     fi
 
     echo ""
-    echo -e "   ${COMMENT}Updating${NC} bwsh ${COMMENT}from${NC} ${PURPLE}$BWSH_VERSION${NC} ${COMMENT}→${NC} ${GREEN}$remote_version${NC}"
+    echo -e "   ${COMMENT}Updating${NC} bwsh ${COMMENT}from${NC} ${ORANGE}$BWSH_VERSION${NC} ${COMMENT}→${NC} ${GREEN}$remote_version${NC}"
     echo ""
 
     # Download installer script
@@ -851,6 +852,7 @@ COMMANDS:
   load                                Load secrets from cache (for shell startup)
   setup                               Interactive configuration
   update [--check]                    Update to latest version
+  uninstall [--force]                 Remove bwsh (--force removes config too)
   version                             Show version
   help                                Show this help
 
@@ -904,6 +906,75 @@ EXAMPLES:
 EOF
 }
 
+# Uninstall bwsh
+_bwsh_uninstall() {
+    local force=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|-f)
+                force=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    echo ""
+    echo -e "   ${COMMENT}Uninstalling${NC} bwsh"
+    echo ""
+
+    local files_to_remove=(
+        "$HOME/.local/bin/bwsh"
+        "$HOME/.bash_completion.d/bwsh.bash"
+        "$HOME/.zsh/completions/_bwsh"
+    )
+
+    local config_files=(
+        "$HOME/.config/bwsh/token"
+        "$HOME/.config/bwsh/project"
+        "$HOME/.config/bwsh/age.key"
+        "$HOME/.cache/bwsh/secrets.age"
+    )
+
+    # Remove main files
+    for file in "${files_to_remove[@]}"; do
+        if [[ -f "$file" ]]; then
+            rm -f "$file"
+            echo -e "   ${COMMENT}Removed${NC} $file"
+        fi
+    done
+
+    # Handle config/cache
+    if [[ "$force" == true ]]; then
+        for file in "${config_files[@]}"; do
+            if [[ -f "$file" ]]; then
+                rm -f "$file"
+                echo -e "   ${COMMENT}Removed${NC} $file"
+            fi
+        done
+        rmdir "$HOME/.config/bwsh" 2>/dev/null && echo -e "   ${COMMENT}Removed${NC} $HOME/.config/bwsh"
+        rmdir "$HOME/.cache/bwsh" 2>/dev/null && echo -e "   ${COMMENT}Removed${NC} $HOME/.cache/bwsh"
+    else
+        if [[ -d "$HOME/.config/bwsh" ]] || [[ -d "$HOME/.cache/bwsh" ]]; then
+            echo ""
+            echo -e "   ${COMMENT}Kept config/cache (use --force to remove):${NC}"
+            [[ -d "$HOME/.config/bwsh" ]] && echo "     ~/.config/bwsh/"
+            [[ -d "$HOME/.cache/bwsh" ]] && echo "     ~/.cache/bwsh/"
+        fi
+    fi
+
+    echo ""
+    echo -e "   ${GREEN}✓${NC} Uninstall complete"
+    echo ""
+    echo -e "   ${COMMENT}Remove these lines from your shell rc file:${NC}"
+    echo "     source ~/.local/bin/bwsh"
+    echo "     bwsh_load"
+    echo ""
+}
+
 # CLI mode handler
 _bwsh_cli() {
     local cmd="${1:-}"
@@ -939,6 +1010,9 @@ _bwsh_cli() {
             ;;
         update)
             _bwsh_update "$@"
+            ;;
+        uninstall)
+            _bwsh_uninstall "$@"
             ;;
         version|-v|--version)
             echo "bwsh $BWSH_VERSION"
