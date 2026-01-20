@@ -3,7 +3,7 @@
 # ABOUTME: Can be sourced for functions or executed as CLI
 
 # Version
-BWSH_VERSION="2026.1.1"
+BWSH_VERSION="2026.2.0"
 
 # Configuration
 # Default project ID - set this after creating your project in Bitwarden
