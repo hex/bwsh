@@ -18,7 +18,7 @@ Thumbs.db
 test-*
 *.test
 
-# bd issue tracking (local only)
-.beads/
-AGENTS.md
-.gitattributes
+.cs/
+CLAUDE.md
+.claude/settings.local.json
+.obsidian/
